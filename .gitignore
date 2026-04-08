@@ -1,0 +1,6 @@
+# Local storage default path
+var/
+
+# Go
+*.test
+*.out

@@ -3,28 +3,27 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestNewAdapter(t *testing.T) {
+func TestNewClient(t *testing.T) {
 	tests := []struct {
 		name        string
 		cfg         Config
 		wantErr     bool
 		errContains string
-		wantWrapper bool
+		errIs       error
 	}{
 		{
 			name: "local adapter success",
 			cfg: Config{
 				Adapter:     "local",
-				StoragePath: filepath.Join(os.TempDir(), "storage-factory-test"),
+				StoragePath: filepath.Join(os.TempDir(), "storage-client-factory-test"),
 			},
-			wantErr:     false,
-			wantWrapper: true,
 		},
 		{
 			name: "local adapter with empty path uses default",
@@ -32,24 +31,24 @@ func TestNewAdapter(t *testing.T) {
 				Adapter:     "local",
 				StoragePath: "",
 			},
-			wantErr:     false,
-			wantWrapper: true,
 		},
 		{
-			name: "minio adapter not implemented",
+			name: "minio adapter not available",
 			cfg: Config{
 				Adapter: "minio",
 			},
 			wantErr:     true,
 			errContains: "not implemented yet",
+			errIs:       ErrAdapterNotFound,
 		},
 		{
-			name: "oss adapter not implemented",
+			name: "oss adapter not available",
 			cfg: Config{
 				Adapter: "oss",
 			},
 			wantErr:     true,
 			errContains: "not implemented yet",
+			errIs:       ErrAdapterNotFound,
 		},
 		{
 			name: "unknown adapter type",
@@ -58,6 +57,7 @@ func TestNewAdapter(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "unknown storage adapter",
+			errIs:       ErrAdapterNotFound,
 		},
 		{
 			name: "empty adapter type",
@@ -66,6 +66,16 @@ func TestNewAdapter(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "unknown storage adapter",
+			errIs:       ErrAdapterNotFound,
+		},
+		{
+			name: "whitespace adapter type",
+			cfg: Config{
+				Adapter: " ",
+			},
+			wantErr:     true,
+			errContains: "unknown storage adapter",
+			errIs:       ErrAdapterNotFound,
 		},
 	}
 
@@ -75,7 +85,7 @@ func TestNewAdapter(t *testing.T) {
 				defer os.RemoveAll(tt.cfg.StoragePath)
 			}
 
-			adapter, err := NewAdapter(tt.cfg)
+			client, err := New(tt.cfg)
 
 			if tt.wantErr {
 				if err == nil {
@@ -84,45 +94,64 @@ func TestNewAdapter(t *testing.T) {
 				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("expected error to contain %q, got %q", tt.errContains, err.Error())
 				}
-				if adapter != nil {
-					t.Error("expected nil adapter on error")
+				if tt.errIs != nil && !errors.Is(err, tt.errIs) {
+					t.Errorf("expected error to wrap %v, got %v", tt.errIs, err)
 				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
+				if client != nil {
+					t.Error("expected nil client on error")
 				}
-				if adapter == nil {
-					t.Fatal("expected non-nil adapter")
-				}
-				if tt.wantWrapper {
-					if _, ok := adapter.(*localAdapterWrapper); !ok {
-						t.Errorf("expected *localAdapterWrapper, got %T", adapter)
-					}
-				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if client == nil {
+				t.Fatal("expected non-nil client")
 			}
 		})
 	}
 }
 
-func TestLocalAdapterWrapper_Put(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-put-test")
+func TestNewClient_InvalidConfig(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-invalid-config-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
 	}
 
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
+	filePath := filepath.Join(tmpDir, "base-path-file")
+	if err := os.WriteFile(filePath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
 	}
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: filePath,
+	})
+	if err == nil {
+		t.Fatal("expected invalid config error, got nil")
+	}
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("expected error to wrap %v, got %v", ErrInvalidConfig, err)
+	}
+	if client != nil {
+		t.Error("expected nil client on error")
+	}
+}
+
+func TestClient_Put(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-put-test")
+	defer os.RemoveAll(tmpDir)
+
+	client := newTestClient(t, tmpDir)
 
 	ctx := context.Background()
 	key := "test/put.txt"
 	content := []byte("test content for put")
 
-	err = adapter.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
+	err := client.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
@@ -133,30 +162,22 @@ func TestLocalAdapterWrapper_Put(t *testing.T) {
 	}
 }
 
-func TestLocalAdapterWrapper_Get(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-get-test")
+func TestClient_Get(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-get-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
-
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
+	client := newTestClient(t, tmpDir)
 
 	ctx := context.Background()
 	key := "test/get.txt"
 	content := []byte("test content for get")
 
-	err = adapter.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
+	err := client.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	reader, err := adapter.Get(ctx, key)
+	reader, err := client.Get(ctx, key)
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -173,108 +194,75 @@ func TestLocalAdapterWrapper_Get(t *testing.T) {
 	}
 }
 
-func TestLocalAdapterWrapper_GetNotFound(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-get-notfound-test")
+func TestClient_GetNotFound(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-get-notfound-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
+	client := newTestClient(t, tmpDir)
 
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
-
-	ctx := context.Background()
-
-	_, err = adapter.Get(ctx, "nonexistent.txt")
+	_, err := client.Get(context.Background(), "nonexistent.txt")
 	if err == nil {
-		t.Error("expected error for nonexistent file")
+		t.Fatal("expected error for nonexistent file")
+	}
+	if !errors.Is(err, ErrFileNotFound) {
+		t.Errorf("expected error to wrap %v, got %v", ErrFileNotFound, err)
 	}
 }
 
-func TestLocalAdapterWrapper_Delete(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-delete-test")
+func TestClient_Delete(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-delete-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
-
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
+	client := newTestClient(t, tmpDir)
 
 	ctx := context.Background()
 	key := "test/delete.txt"
 	content := []byte("to be deleted")
 
-	err = adapter.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
+	err := client.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	err = adapter.Delete(ctx, key)
+	err = client.Delete(ctx, key)
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	_, err = adapter.Get(ctx, key)
+	_, err = client.Get(ctx, key)
 	if err == nil {
 		t.Error("expected error after delete")
 	}
 }
 
-func TestLocalAdapterWrapper_DeleteNotFound(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-delete-notfound-test")
+func TestClient_DeleteNotFound(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-delete-notfound-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
+	client := newTestClient(t, tmpDir)
 
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
-
-	ctx := context.Background()
-
-	err = adapter.Delete(ctx, "nonexistent.txt")
+	err := client.Delete(context.Background(), "nonexistent.txt")
 	if err != nil {
 		t.Errorf("Delete should not error for nonexistent file: %v", err)
 	}
 }
 
-func TestLocalAdapterWrapper_Stat(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-stat-test")
+func TestClient_Stat(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-stat-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
-
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
+	client := newTestClient(t, tmpDir)
 
 	ctx := context.Background()
 	key := "test/stat.txt"
 	content := []byte("stat test content")
 
-	err = adapter.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
+	err := client.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	info, err := adapter.Stat(ctx, key)
+	info, err := client.Stat(ctx, key)
 	if err != nil {
 		t.Fatalf("Stat failed: %v", err)
 	}
@@ -288,47 +276,32 @@ func TestLocalAdapterWrapper_Stat(t *testing.T) {
 	}
 }
 
-func TestLocalAdapterWrapper_StatNotFound(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-stat-notfound-test")
+func TestClient_StatNotFound(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-stat-notfound-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
+	client := newTestClient(t, tmpDir)
 
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
-
-	ctx := context.Background()
-
-	_, err = adapter.Stat(ctx, "nonexistent.txt")
+	_, err := client.Stat(context.Background(), "nonexistent.txt")
 	if err == nil {
-		t.Error("expected error for nonexistent file")
+		t.Fatal("expected error for nonexistent file")
+	}
+	if !errors.Is(err, ErrFileNotFound) {
+		t.Errorf("expected error to wrap %v, got %v", ErrFileNotFound, err)
 	}
 }
 
-func TestLocalAdapterWrapper_Exists(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-exists-test")
+func TestClient_Exists(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-exists-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
-
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
+	client := newTestClient(t, tmpDir)
 
 	ctx := context.Background()
 	key := "test/exists.txt"
 	content := []byte("exists test")
 
-	exists, err := adapter.Exists(ctx, key)
+	exists, err := client.Exists(ctx, key)
 	if err != nil {
 		t.Fatalf("Exists failed: %v", err)
 	}
@@ -336,12 +309,12 @@ func TestLocalAdapterWrapper_Exists(t *testing.T) {
 		t.Error("file should not exist yet")
 	}
 
-	err = adapter.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
+	err = client.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	exists, err = adapter.Exists(ctx, key)
+	exists, err = client.Exists(ctx, key)
 	if err != nil {
 		t.Fatalf("Exists failed: %v", err)
 	}
@@ -350,23 +323,13 @@ func TestLocalAdapterWrapper_Exists(t *testing.T) {
 	}
 }
 
-func TestLocalAdapterWrapper_ExistsNotFound(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-exists-notfound-test")
+func TestClient_ExistsNotFound(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-exists-notfound-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
+	client := newTestClient(t, tmpDir)
 
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
-
-	ctx := context.Background()
-
-	exists, err := adapter.Exists(ctx, "nonexistent.txt")
+	exists, err := client.Exists(context.Background(), "nonexistent.txt")
 	if err != nil {
 		t.Fatalf("Exists should not error: %v", err)
 	}
@@ -375,25 +338,28 @@ func TestLocalAdapterWrapper_ExistsNotFound(t *testing.T) {
 	}
 }
 
-func TestLocalAdapterWrapper_Integration(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-integration-test")
+func TestClient_Close(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-close-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
+	client := newTestClient(t, tmpDir)
 
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
 	}
+}
+
+func TestClient_Integration(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-integration-test")
+	defer os.RemoveAll(tmpDir)
+
+	client := newTestClient(t, tmpDir)
 
 	ctx := context.Background()
 	key := "integration/workflow.txt"
 	content := []byte("integration test content")
 
-	exists, err := adapter.Exists(ctx, key)
+	exists, err := client.Exists(ctx, key)
 	if err != nil {
 		t.Fatalf("Exists failed: %v", err)
 	}
@@ -401,12 +367,12 @@ func TestLocalAdapterWrapper_Integration(t *testing.T) {
 		t.Fatal("file should not exist initially")
 	}
 
-	err = adapter.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
+	err = client.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	exists, err = adapter.Exists(ctx, key)
+	exists, err = client.Exists(ctx, key)
 	if err != nil {
 		t.Fatalf("Exists failed: %v", err)
 	}
@@ -414,7 +380,7 @@ func TestLocalAdapterWrapper_Integration(t *testing.T) {
 		t.Fatal("file should exist after Put")
 	}
 
-	info, err := adapter.Stat(ctx, key)
+	info, err := client.Stat(ctx, key)
 	if err != nil {
 		t.Fatalf("Stat failed: %v", err)
 	}
@@ -423,7 +389,7 @@ func TestLocalAdapterWrapper_Integration(t *testing.T) {
 	}
 
 	func() {
-		reader, err := adapter.Get(ctx, key)
+		reader, err := client.Get(ctx, key)
 		if err != nil {
 			t.Fatalf("Get failed: %v", err)
 		}
@@ -439,12 +405,12 @@ func TestLocalAdapterWrapper_Integration(t *testing.T) {
 		}
 	}()
 
-	err = adapter.Delete(ctx, key)
+	err = client.Delete(ctx, key)
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	exists, err = adapter.Exists(ctx, key)
+	exists, err = client.Exists(ctx, key)
 	if err != nil {
 		t.Fatalf("Exists failed: %v", err)
 	}
@@ -453,30 +419,22 @@ func TestLocalAdapterWrapper_Integration(t *testing.T) {
 	}
 }
 
-func TestLocalAdapterWrapper_StatFileInfoConversion(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), "storage-wrapper-stat-conversion-test")
+func TestClient_StatFileInfoConversion(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-stat-conversion-test")
 	defer os.RemoveAll(tmpDir)
 
-	cfg := Config{
-		Adapter:     "local",
-		StoragePath: tmpDir,
-	}
-
-	adapter, err := NewAdapter(cfg)
-	if err != nil {
-		t.Fatalf("failed to create adapter: %v", err)
-	}
+	client := newTestClient(t, tmpDir)
 
 	ctx := context.Background()
 	key := "test/conversion.txt"
 	content := []byte("conversion test")
 
-	err = adapter.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
+	err := client.Put(ctx, key, bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	info, err := adapter.Stat(ctx, key)
+	info, err := client.Stat(ctx, key)
 	if err != nil {
 		t.Fatalf("Stat failed: %v", err)
 	}
@@ -493,4 +451,18 @@ func TestLocalAdapterWrapper_StatFileInfoConversion(t *testing.T) {
 	if info.CreatedAt.IsZero() {
 		t.Error("CreatedAt should not be zero")
 	}
+}
+
+func newTestClient(t *testing.T, storagePath string) *Client {
+	t.Helper()
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: storagePath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	return client
 }
