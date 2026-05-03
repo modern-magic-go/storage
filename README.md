@@ -104,6 +104,42 @@ func main() {
 
 - `NewAdapter(cfg Config) (StorageAdapter, error)` — 返回原始适配器（向后兼容）
 
+## Bucket 校验
+
+通过 `Config.Buckets` 可为不同逻辑 Bucket 配置上传限制，key 的第一段路径作为 Bucket 名称匹配（如 `avatars/user123.jpg` → bucket = `avatars`）。
+
+```go
+client, _ := storage.New(storage.Config{
+    Adapter:     "local",
+    StoragePath: "./data",
+    Buckets: []storage.BucketConf{
+        {
+            Name:         "avatars",
+            MaxFileSize:  5 * 1024 * 1024,       // 5MB
+            AllowedTypes: []string{"jpg", "png"}, // 仅允许图片
+        },
+        {
+            Name:         "docs",
+            MaxFileSize:  50 * 1024 * 1024,      // 50MB
+            AllowedTypes: []string{"pdf", "doc", "docx"},
+        },
+    },
+})
+
+// 匹配 "avatars" bucket，触发校验
+client.Put(ctx, "avatars/photo.jpg", reader, size)  // ✓ 通过
+client.Put(ctx, "avatars/video.mp4", reader, size)  // ✗ ErrFileTypeNotAllowed
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `Name` | Bucket 名称，匹配 key 的第一段路径 |
+| `MaxFileSize` | 最大文件大小（字节），0 表示不限制 |
+| `AllowedTypes` | 允许的扩展名列表（不含点），空表示不限制 |
+| `Access` | 访问策略标记（`public_read` / `authenticated`），当前作元数据用途 |
+
+未配置 Buckets 或 key 未匹配任何 Bucket 时，跳过校验（向后兼容）。
+
 ## 支持的存储后端
 
 | 适配器 | 状态 |

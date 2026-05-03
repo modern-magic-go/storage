@@ -162,6 +162,123 @@ func TestClient_Put(t *testing.T) {
 	}
 }
 
+func TestClient_Put_MaxFileSize(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-put-max-file-size-test")
+	defer os.RemoveAll(tmpDir)
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: tmpDir,
+		Buckets: []BucketConf{{
+			Name:        "docs",
+			MaxFileSize: 100,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	err = client.Put(context.Background(), "docs/file.txt", bytes.NewReader([]byte("content")), 200)
+	if err == nil {
+		t.Fatal("expected error for oversized file")
+	}
+	if !errors.Is(err, ErrFileTooLarge) {
+		t.Errorf("expected error to wrap %v, got %v", ErrFileTooLarge, err)
+	}
+}
+
+func TestClient_Put_AllowedTypes(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-put-allowed-types-test")
+	defer os.RemoveAll(tmpDir)
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: tmpDir,
+		Buckets: []BucketConf{{
+			Name:         "docs",
+			AllowedTypes: []string{"jpg", "png"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	err = client.Put(context.Background(), "docs/file.pdf", bytes.NewReader([]byte("content")), 7)
+	if err == nil {
+		t.Fatal("expected error for disallowed file type")
+	}
+	if !errors.Is(err, ErrFileTypeNotAllowed) {
+		t.Errorf("expected error to wrap %v, got %v", ErrFileTypeNotAllowed, err)
+	}
+}
+
+func TestClient_Put_BucketValidationPasses(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-put-bucket-validation-passes-test")
+	defer os.RemoveAll(tmpDir)
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: tmpDir,
+		Buckets: []BucketConf{{
+			Name:         "docs",
+			MaxFileSize:  1024,
+			AllowedTypes: []string{"txt"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	content := []byte("valid content")
+	err = client.Put(context.Background(), "docs/file.txt", bytes.NewReader(content), 100)
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+}
+
+func TestClient_Put_NoBucketConfig(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-put-no-bucket-config-test")
+	defer os.RemoveAll(tmpDir)
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	content := []byte("no bucket config")
+	err = client.Put(context.Background(), "docs/file.pdf", bytes.NewReader(content), 200)
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+}
+
+func TestClient_Put_BucketNotMatched(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-put-bucket-not-matched-test")
+	defer os.RemoveAll(tmpDir)
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: tmpDir,
+		Buckets: []BucketConf{{
+			Name:         "images",
+			MaxFileSize:  100,
+			AllowedTypes: []string{"jpg", "png"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	content := []byte("bucket not matched")
+	err = client.Put(context.Background(), "other/file.pdf", bytes.NewReader(content), 200)
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+}
+
 func TestClient_Get(t *testing.T) {
 	tmpDir := filepath.Join(os.TempDir(), "storage-client-get-test")
 	defer os.RemoveAll(tmpDir)

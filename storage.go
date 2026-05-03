@@ -12,6 +12,7 @@ import (
 // Client is the public facade for storage operations.
 type Client struct {
 	adapter StorageAdapter
+	buckets map[string]BucketConf
 }
 
 // New creates a storage client from public configuration.
@@ -21,7 +22,15 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{adapter: adapter}, nil
+	var buckets map[string]BucketConf
+	if len(cfg.Buckets) > 0 {
+		buckets = make(map[string]BucketConf, len(cfg.Buckets))
+		for _, bucket := range cfg.Buckets {
+			buckets[bucket.Name] = bucket
+		}
+	}
+
+	return &Client{adapter: adapter, buckets: buckets}, nil
 }
 
 // NewAdapter preserves the legacy adapter-based constructor.
@@ -31,6 +40,19 @@ func NewAdapter(cfg Config) (StorageAdapter, error) {
 
 // Put stores content at the given key.
 func (c *Client) Put(ctx context.Context, key string, reader io.Reader, size int64) error {
+	if bucket := c.resolveBucket(key); bucket != nil {
+		if bucket.MaxFileSize > 0 && size > bucket.MaxFileSize {
+			return fmt.Errorf("file size %d exceeds bucket %q limit %d: %w", size, bucket.Name, bucket.MaxFileSize, ErrFileTooLarge)
+		}
+
+		if len(bucket.AllowedTypes) > 0 {
+			ext := extractExtension(key)
+			if !isTypeAllowed(ext, bucket.AllowedTypes) {
+				return fmt.Errorf("file type %q not allowed for bucket %q: %w", ext, bucket.Name, ErrFileTypeNotAllowed)
+			}
+		}
+	}
+
 	if err := c.adapter.Put(ctx, key, reader, size); err != nil {
 		return wrapOperationError("put", key, err)
 	}
@@ -80,6 +102,40 @@ func (c *Client) Close() error {
 		}
 	}
 	return nil
+}
+
+func (c *Client) resolveBucket(key string) *BucketConf {
+	if len(c.buckets) == 0 {
+		return nil
+	}
+
+	bucketName, _, _ := strings.Cut(key, "/")
+	bucket, ok := c.buckets[bucketName]
+	if !ok {
+		return nil
+	}
+
+	return &bucket
+}
+
+// extractExtension returns the file extension (without dot) from a key.
+// Returns empty string if no extension found.
+func extractExtension(key string) string {
+	idx := strings.LastIndex(key, ".")
+	if idx == -1 || idx == len(key)-1 {
+		return ""
+	}
+	return strings.ToLower(key[idx+1:])
+}
+
+// isTypeAllowed checks if ext is in the allowedTypes list (case-insensitive).
+func isTypeAllowed(ext string, allowedTypes []string) bool {
+	for _, t := range allowedTypes {
+		if strings.EqualFold(ext, t) {
+			return true
+		}
+	}
+	return false
 }
 
 func newAdapter(cfg Config) (StorageAdapter, error) {
