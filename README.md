@@ -6,10 +6,18 @@
 
 ## 特性
 
-- 门面模式（Facade）设计，隐藏后端复杂度
-- 可插拔适配器架构
-- 统一的存储操作 API
-- 全操作支持 `context.Context`
+- 统一接口：Put / Get / Delete / Stat / Exists，一套 API 覆盖所有后端
+- 桶级校验：按 bucket 限制文件类型和大小，配置即生效
+- 内容一致性：Stat 返回 SHA256 ETag，可用于缓存失效和完整性校验
+- 可插拔架构：本地文件系统已就绪，MinIO / OSS 适配器预留
+- 全链路 `context.Context`：所有操作支持超时和取消
+
+## 适用场景
+
+- **用户上传管理**：头像、附件、文档，按 bucket 限制类型和大小
+- **本地开发替代**：无需 S3/MinIO 即可跑通存储逻辑，生产换适配器即可
+- **内容缓存**：通过 ETag 判断文件是否变更，避免重复下载
+- **静态资源托管**：本地文件系统直接作为后端服务的存储层
 
 ## 安装
 
@@ -58,12 +66,13 @@ func main() {
     }
     fmt.Println("exists:", exists)
 
-    // 获取文件信息
+    // 获取文件信息（含 ETag）
     info, err := client.Stat(ctx, "hello.txt")
     if err != nil {
         panic(err)
     }
     fmt.Println("size:", info.Size)
+    fmt.Println("etag:", info.ETag)
 
     // 读取文件
     reader, err := client.Get(ctx, "hello.txt")
@@ -136,7 +145,6 @@ client.Put(ctx, "avatars/video.mp4", reader, size)  // ✗ ErrFileTypeNotAllowed
 | `Name` | Bucket 名称，匹配 key 的第一段路径 |
 | `MaxFileSize` | 最大文件大小（字节），0 表示不限制 |
 | `AllowedTypes` | 允许的扩展名列表（不含点），空表示不限制 |
-| `Access` | 访问策略标记（`public_read` / `authenticated`），当前作元数据用途 |
 
 未配置 Buckets 或 key 未匹配任何 Bucket 时，跳过校验（向后兼容）。
 
@@ -167,7 +175,7 @@ storage/
     │   ├── local/    # 本地文件系统适配器
     │   ├── minio/    # MinIO 适配器（待实现）
     │   └── oss/      # 阿里云 OSS 适配器（待实现）
-    └── utils/        # 内部工具（hash 等）
+    └── utils/        # 内部工具（etag 等）
 ```
 
 - 根包：公共门面、配置、类型定义和错误
