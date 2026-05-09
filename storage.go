@@ -184,6 +184,7 @@ func (a *localAdapterWrapper) Stat(ctx context.Context, key string) (FileInfo, e
 		Size:      info.Size,
 		MimeType:  info.MimeType,
 		CreatedAt: info.CreatedAt,
+		ETag:      info.ETag,
 	}, nil
 }
 

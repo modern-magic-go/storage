@@ -11,6 +11,7 @@ type FileInfo struct {
 	Size      int64
 	MimeType  string
 	CreatedAt time.Time
+	ETag      string
 }
 
 type StorageAdapter interface {

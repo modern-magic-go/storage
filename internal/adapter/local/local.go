@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/modern-magic-go/storage/internal/utils"
 )
 
 type LocalAdapter struct {
@@ -95,12 +97,27 @@ func (a *LocalAdapter) Stat(ctx context.Context, key string) (FileInfo, error) {
 
 	mimeType := detectMimeType(info.Name())
 
+	etag, err := computeFileETag(fullPath)
+	if err != nil {
+		return FileInfo{}, fmt.Errorf("failed to compute etag for %s: %w", key, err)
+	}
+
 	return FileInfo{
 		Key:       key,
 		Size:      info.Size(),
 		MimeType:  mimeType,
 		CreatedAt: info.ModTime(),
+		ETag:      etag,
 	}, nil
+}
+
+func computeFileETag(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return utils.ComputeETag(f)
 }
 
 // FileInfo 文件信息
@@ -109,6 +126,7 @@ type FileInfo struct {
 	Size      int64
 	MimeType  string
 	CreatedAt time.Time
+	ETag      string
 }
 
 func (a *LocalAdapter) Exists(ctx context.Context, key string) (bool, error) {

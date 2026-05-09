@@ -3,11 +3,11 @@ package storage
 import "errors"
 
 var (
-	ErrAdapterNotFound    = errors.New("storage adapter not found")
-	ErrBucketNotFound     = errors.New("storage bucket not found")
-	ErrFileTooLarge       = errors.New("storage file too large")
-	ErrFileNotFound       = errors.New("storage file not found")
-	ErrFileTypeNotAllowed = errors.New("storage file type not allowed")
 	ErrInvalidConfig      = errors.New("invalid storage config")
+	ErrFileNotFound       = errors.New("file not found")
+	ErrFileTooLarge       = errors.New("file too large")
+	ErrFileTypeNotAllowed = errors.New("file type not allowed")
 	ErrOperationFailed    = errors.New("storage operation failed")
+	ErrBucketNotFound     = errors.New("bucket not found")
+	ErrAdapterNotFound    = errors.New("adapter not found")
 )

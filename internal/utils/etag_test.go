@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestCalculateHash(t *testing.T) {
+func TestComputeETag(t *testing.T) {
 	tests := []struct {
 		name     string
 		content  string
@@ -26,38 +26,41 @@ func TestCalculateHash(t *testing.T) {
 		{
 			name:     "test content",
 			content:  "test content for hash",
-			expected: "c5d3e877f5c98e240bfba3c6d136299f5a8e0c3d5e8f3a7b9c1d2e4f6a8b0c2d",
+			expected: "ee63779c8078ead9b4c682d6bd8662edac699d851ed85cd120d3236609bb3253",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := strings.NewReader(tt.content)
-			got, err := CalculateHash(reader)
+			got, err := ComputeETag(reader)
 			if err != nil {
-				t.Fatalf("CalculateHash failed: %v", err)
+				t.Fatalf("ComputeETag failed: %v", err)
 			}
 
-			// 注意：第三个测试用例的 expected 是占位符，实际值会不同
-			// 这里只验证哈希计算不报错且返回正确格式
 			if len(got) != 64 {
 				t.Errorf("expected hash length 64, got %d", len(got))
+			}
+
+			if got != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, got)
 			}
 		})
 	}
 }
 
-func TestCalculateHash_Consistency(t *testing.T) {
+func TestComputeETag_Consistency(t *testing.T) {
 	content := "consistent content"
+	expected := "1604d02cf3ce7a673838d7e644fa9f4e7d0490844b4e266fe117740afb9bf228"
 
 	reader1 := strings.NewReader(content)
-	hash1, err := CalculateHash(reader1)
+	hash1, err := ComputeETag(reader1)
 	if err != nil {
 		t.Fatalf("first hash failed: %v", err)
 	}
 
 	reader2 := strings.NewReader(content)
-	hash2, err := CalculateHash(reader2)
+	hash2, err := ComputeETag(reader2)
 	if err != nil {
 		t.Fatalf("second hash failed: %v", err)
 	}
@@ -65,15 +68,19 @@ func TestCalculateHash_Consistency(t *testing.T) {
 	if hash1 != hash2 {
 		t.Errorf("hash inconsistency: %s != %s", hash1, hash2)
 	}
+
+	if hash1 != expected {
+		t.Errorf("expected %q, got %q", expected, hash1)
+	}
 }
 
-func TestCalculateHash_Stream(t *testing.T) {
+func TestComputeETag_Stream(t *testing.T) {
 	content := []byte("streaming content")
 
 	reader := bytes.NewReader(content)
-	hash, err := CalculateHash(reader)
+	hash, err := ComputeETag(reader)
 	if err != nil {
-		t.Fatalf("CalculateHash failed: %v", err)
+		t.Fatalf("ComputeETag failed: %v", err)
 	}
 
 	if len(hash) != 64 {
@@ -81,16 +88,16 @@ func TestCalculateHash_Stream(t *testing.T) {
 	}
 }
 
-type errorReader struct{}
+type etagErrorReader struct{}
 
-func (r *errorReader) Read(p []byte) (n int, err error) {
+func (r *etagErrorReader) Read(p []byte) (n int, err error) {
 	return 0, io.ErrUnexpectedEOF
 }
 
-func TestCalculateHash_ReaderError(t *testing.T) {
-	reader := &errorReader{}
+func TestComputeETag_ReaderError(t *testing.T) {
+	reader := &etagErrorReader{}
 
-	hash, err := CalculateHash(reader)
+	hash, err := ComputeETag(reader)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

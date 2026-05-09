@@ -391,6 +391,10 @@ func TestClient_Stat(t *testing.T) {
 	if info.Size != int64(len(content)) {
 		t.Errorf("size mismatch: expected %d, got %d", len(content), info.Size)
 	}
+
+	if info.ETag == "" {
+		t.Error("ETag should not be empty")
+	}
 }
 
 func TestClient_StatNotFound(t *testing.T) {
@@ -504,6 +508,9 @@ func TestClient_Integration(t *testing.T) {
 	if info.Size != int64(len(content)) {
 		t.Errorf("size mismatch: expected %d, got %d", len(content), info.Size)
 	}
+	if info.ETag == "" {
+		t.Error("ETag should not be empty in integration test")
+	}
 
 	func() {
 		reader, err := client.Get(ctx, key)
@@ -567,6 +574,157 @@ func TestClient_StatFileInfoConversion(t *testing.T) {
 	}
 	if info.CreatedAt.IsZero() {
 		t.Error("CreatedAt should not be zero")
+	}
+	if info.ETag == "" {
+		t.Error("ETag should not be empty")
+	}
+}
+
+func TestClient_ETag_Consistency(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-etag-consistency-test")
+	defer os.RemoveAll(tmpDir)
+
+	client := newTestClient(t, tmpDir)
+
+	ctx := context.Background()
+	content := []byte("same content for etag check")
+
+	err := client.Put(ctx, "a/file.txt", bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatalf("Put a failed: %v", err)
+	}
+
+	err = client.Put(ctx, "b/file.txt", bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatalf("Put b failed: %v", err)
+	}
+
+	infoA, err := client.Stat(ctx, "a/file.txt")
+	if err != nil {
+		t.Fatalf("Stat a failed: %v", err)
+	}
+
+	infoB, err := client.Stat(ctx, "b/file.txt")
+	if err != nil {
+		t.Fatalf("Stat b failed: %v", err)
+	}
+
+	if infoA.ETag != infoB.ETag {
+		t.Errorf("ETag mismatch for same content: %s != %s", infoA.ETag, infoB.ETag)
+	}
+}
+
+func TestClient_ETag_EmptyContent(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-etag-empty-test")
+	defer os.RemoveAll(tmpDir)
+
+	client := newTestClient(t, tmpDir)
+
+	ctx := context.Background()
+	content := []byte("")
+
+	err := client.Put(ctx, "empty.txt", bytes.NewReader(content), 0)
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	info, err := client.Stat(ctx, "empty.txt")
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	expected := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if info.ETag != expected {
+		t.Errorf("empty file ETag mismatch: expected %s, got %s", expected, info.ETag)
+	}
+}
+
+func TestClient_ETag_KnownValue(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-etag-known-test")
+	defer os.RemoveAll(tmpDir)
+
+	client := newTestClient(t, tmpDir)
+
+	ctx := context.Background()
+	content := []byte("hello world")
+
+	err := client.Put(ctx, "hello.txt", bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	info, err := client.Stat(ctx, "hello.txt")
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	expected := "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+	if info.ETag != expected {
+		t.Errorf("ETag mismatch for 'hello world': expected %s, got %s", expected, info.ETag)
+	}
+}
+
+func TestClient_StoragePathRelative(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-relpath-test")
+	defer os.RemoveAll(tmpDir)
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx := context.Background()
+	content := []byte("relative path")
+
+	err = client.Put(ctx, "file.txt", bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	info, err := client.Stat(ctx, "file.txt")
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	if info.Size != int64(len(content)) {
+		t.Errorf("size mismatch: expected %d, got %d", len(content), info.Size)
+	}
+}
+
+func TestClient_StoragePathAbsolute(t *testing.T) {
+	tmpDir := filepath.Join(os.TempDir(), "storage-client-abspath-test")
+	defer os.RemoveAll(tmpDir)
+
+	absPath, err := filepath.Abs(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to get abs path: %v", err)
+	}
+
+	client, err := New(Config{
+		Adapter:     "local",
+		StoragePath: absPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx := context.Background()
+	content := []byte("absolute path")
+
+	err = client.Put(ctx, "file.txt", bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	exists, err := client.Exists(ctx, "file.txt")
+	if err != nil {
+		t.Fatalf("Exists failed: %v", err)
+	}
+	if !exists {
+		t.Error("file should exist after Put with absolute path")
 	}
 }
 

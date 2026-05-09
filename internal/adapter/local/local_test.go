@@ -182,6 +182,14 @@ func TestStat(t *testing.T) {
 	if info.Size != int64(len(content)) {
 		t.Errorf("size mismatch: expected %d, got %d", len(content), info.Size)
 	}
+
+	if info.ETag == "" {
+		t.Error("ETag should not be empty")
+	}
+
+	if len(info.ETag) != 64 {
+		t.Errorf("ETag should be 64 hex chars, got %d", len(info.ETag))
+	}
 }
 
 func TestStatNotFound(t *testing.T) {
